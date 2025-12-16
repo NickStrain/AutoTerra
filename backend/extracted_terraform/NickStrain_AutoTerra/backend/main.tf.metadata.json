@@ -1,0 +1,17 @@
+{
+  "path": "backend/main.tf",
+  "repo_name": "NickStrain/AutoTerra",
+  "repo_url": "https://github.com/NickStrain/AutoTerra",
+  "file_hash": "41fa81a2800aec163e6304fbd924272cee2a98bc91e513a4004af98aa7db750e",
+  "file_type": "main",
+  "resources": [
+    "aws_s3_bucket.this",
+    "aws_s3_bucket_versioning.this"
+  ],
+  "modules": [],
+  "providers": [],
+  "variables": [],
+  "outputs": [],
+  "size_bytes": 315,
+  "last_modified": "Tue, 16 Dec 2025 04:07:25 GMT"
+}

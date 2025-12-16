@@ -73,15 +73,14 @@ async def lifespan(app: FastAPI):
     print("👋 Shutting down...")
 
 app = FastAPI(title="Terraform IaC Generator API", lifespan=lifespan)
-
-# CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
+    allow_origins=["*"],  # tighten later
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # MUST include OPTIONS
+    allow_headers=["*"],  # MUST include Content-Type, Authorization
 )
+
 
 # Pydantic models
 class QueryRequest(BaseModel):
@@ -113,6 +112,17 @@ async def root():
         "service": "Terraform IaC Generator API",
         "version": "1.0.0"
     }
+
+# FIXED: Add explicit OPTIONS handler for CORS preflight
+@app.options("/api/analyze-query")
+async def options_analyze_query():
+    """Handle CORS preflight for analyze-query"""
+    return {"status": "ok"}
+
+@app.options("/api/generate")
+async def options_generate():
+    """Handle CORS preflight for generate"""
+    return {"status": "ok"}
 
 @app.post("/api/analyze-query", response_model=AnalyzeResponse)
 async def analyze_query(request: QueryRequest):
