@@ -4,3 +4,4 @@ uvicorn
 pinecone
 sentence-transformers
 python-dotenv
+github
