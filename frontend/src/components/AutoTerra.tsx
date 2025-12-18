@@ -102,7 +102,6 @@ const AutoTerra = () => {
 
       const data = await response.json();
       setRequirements(data.requirements);
-      
       setVariables(data.requirements.user_provided_values || {});
 
       if (data.requirements.required_variables?.length > 0) {
@@ -204,7 +203,6 @@ const AutoTerra = () => {
       }
 
       const repos: Repository[] = await response.json();
-      
       const reposWithTerraformCheck = await Promise.all(
         repos.map(async (repo) => {
           try {
@@ -217,7 +215,6 @@ const AutoTerra = () => {
                 }
               }
             );
-            
             if (contentsResponse.ok) {
               const contents = await contentsResponse.json();
               const hasTerraform = contents.some((item: any) => 
@@ -280,7 +277,6 @@ const AutoTerra = () => {
       }
 
       const data = await response.json();
-      
       // Update UI with results
       setExtractedFiles(data.files || []);
       setShowGithubModal(false);
@@ -300,68 +296,6 @@ const AutoTerra = () => {
     }
   };
 
-  const extractFromRepository = async (repo: Repository): Promise<TerraformFile[]> => {
-    const files: TerraformFile[] = [];
-    const contents = await fetchRepoContents(repo.full_name, '');
-
-    for (const item of contents) {
-      if (item.type === 'file' && (item.name.endsWith('.tf') || item.name.endsWith('.tfvars'))) {
-        try {
-          const fileResponse = await fetch(item.download_url, {
-            headers: { 'Authorization': `Bearer ${githubToken}` }
-          });
-          
-          if (fileResponse.ok) {
-            const content = await fileResponse.text();
-            const tfFile = parseTerraformFile(item.path, content);
-            files.push(tfFile);
-          }
-        } catch (err) {
-          console.error(`Failed to fetch ${item.path}:`, err);
-        }
-      }
-    }
-
-    return files;
-  };
-
-  const fetchRepoContents = async (repoFullName: string, path: string): Promise<any[]> => {
-    try {
-      const url = path 
-        ? `https://api.github.com/repos/${repoFullName}/contents/${path}`
-        : `https://api.github.com/repos/${repoFullName}/contents`;
-        
-      const response = await fetch(url, {
-        headers: {
-          'Authorization': `Bearer ${githubToken}`,
-          'Accept': 'application/vnd.github.v3+json'
-        }
-      });
-
-      if (response.ok) {
-        return await response.json();
-      }
-    } catch (err) {
-      console.error(`Failed to fetch contents:`, err);
-    }
-    return [];
-  };
-
-  const parseTerraformFile = (path: string, content: string): TerraformFile => {
-    const resourceMatches = content.matchAll(/resource\s+"([^"]+)"\s+"([^"]+)"/g);
-    const resources = Array.from(resourceMatches, m => `${m[1]}.${m[2]}`);
-    
-    const providerMatches = content.matchAll(/provider\s+"([^"]+)"/g);
-    const providers = Array.from(new Set(Array.from(providerMatches, m => m[1])));
-
-    const fileType = path.includes('variables') ? 'variables' 
-                   : path.includes('outputs') ? 'outputs'
-                   : path.includes('main') ? 'main' 
-                   : 'resource';
-
-    return { path, content, file_type: fileType, resources, providers };
-  };
-
   const toggleRepo = (repoId: number) => {
     const newSelected = new Set(selectedRepos);
     if (newSelected.has(repoId)) {
@@ -374,18 +308,15 @@ const AutoTerra = () => {
 
   const getFilteredRepos = () => {
     let filtered = repositories;
-    
     if (filterTerraform) {
       filtered = filtered.filter(r => r.has_terraform);
     }
-    
     if (searchTerm) {
       filtered = filtered.filter(r => 
         r.full_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
         r.description?.toLowerCase().includes(searchTerm.toLowerCase())
       );
     }
-    
     return filtered;
   };
 
@@ -400,7 +331,6 @@ const AutoTerra = () => {
   return (
     <div className="min-h-screen bg-background">
       <div className="fixed inset-0 bg-[linear-gradient(to_right,hsl(var(--border)/0.3)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/0.3)_1px,transparent_1px)] bg-[size:64px_64px] pointer-events-none" />
-      
       <div className="relative max-w-5xl mx-auto px-6 py-12">
         <header className="text-center mb-12 animate-fade-in">
           <div className="inline-flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/20 rounded-full text-primary text-sm mb-6">
@@ -507,7 +437,6 @@ const AutoTerra = () => {
         {requiresInput && requirements && (
           <section className="card-minimal mb-8 animate-slide-up">
             <h2 className="text-xl font-semibold text-foreground mb-6">Required Information</h2>
-            
             {Object.keys(variables).length > 0 && (
               <div className="mb-6">
                 <h3 className="text-sm font-medium text-muted-foreground mb-3 uppercase tracking-wider">
@@ -588,7 +517,6 @@ const AutoTerra = () => {
                       cost_optimizer: DollarSign
                     };
                     const Icon = icons[agent] || CheckCircle;
-                    
                     return (
                       <div 
                         key={agent} 
