@@ -1,9 +1,19 @@
-import { ArrowRight, Code, Shield, Zap, Terminal, DollarSign, TestTube, Layers, CheckCircle, GitBranch, LogIn, LogOut } from 'lucide-react';
+import { ArrowRight, Code, Shield, Zap, Terminal, DollarSign, TestTube, Layers, CheckCircle, LogIn, LogOut, CreditCard, Loader2 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
+import { useSubscription } from '@/hooks/useSubscription';
 
 const Landing = () => {
   const { user, signOut } = useAuth();
+  const { subscribed, loading: subLoading, createCheckout } = useSubscription();
+
+  const handleSubscribe = async () => {
+    try {
+      await createCheckout();
+    } catch (error) {
+      console.error('Error creating checkout:', error);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -17,9 +27,24 @@ const Landing = () => {
           <div className="flex items-center gap-3">
             {user ? (
               <>
-                <Link to="/app" className="btn-primary text-sm">
-                  Launch App
-                </Link>
+                {subscribed ? (
+                  <Link to="/app" className="btn-primary text-sm">
+                    Launch App
+                  </Link>
+                ) : (
+                  <button
+                    onClick={handleSubscribe}
+                    disabled={subLoading}
+                    className="btn-primary text-sm flex items-center gap-2"
+                  >
+                    {subLoading ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <CreditCard className="w-4 h-4" />
+                    )}
+                    Subscribe $9.99/mo
+                  </button>
+                )}
                 <button
                   onClick={() => signOut()}
                   className="btn-secondary text-sm flex items-center gap-2"
@@ -57,13 +82,38 @@ const Landing = () => {
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-            <Link 
-              to="/app" 
-              className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
-            >
-              Start Generating
-              <ArrowRight className="w-5 h-5" />
-            </Link>
+            {user ? (
+              subscribed ? (
+                <Link 
+                  to="/app" 
+                  className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
+                >
+                  Start Generating
+                  <ArrowRight className="w-5 h-5" />
+                </Link>
+              ) : (
+                <button
+                  onClick={handleSubscribe}
+                  disabled={subLoading}
+                  className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
+                >
+                  {subLoading ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <CreditCard className="w-5 h-5" />
+                  )}
+                  Subscribe to Get Started - $9.99/mo
+                </button>
+              )
+            ) : (
+              <Link 
+                to="/auth" 
+                className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
+              >
+                Sign In to Get Started
+                <ArrowRight className="w-5 h-5" />
+              </Link>
+            )}
             <a 
               href="https://github.com" 
               target="_blank"
@@ -113,7 +163,7 @@ const Landing = () => {
   tags = {
     Name        = "data-prod"
     Environment = "production"
-    ManagedBy   = "terrafosdfsdfrm"
+    ManagedBy   = "terraform"
   }
 }
 
@@ -238,13 +288,38 @@ resource "aws_s3_bucket_versioning" "data_prod" {
           <p className="text-muted-foreground mb-8">
             Stop writing boilerplate. Start deploying faster.
           </p>
-          <Link 
-            to="/app" 
-            className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
-          >
-            Get Started
-            <ArrowRight className="w-5 h-5" />
-          </Link>
+          {user ? (
+            subscribed ? (
+              <Link 
+                to="/app" 
+                className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
+              >
+                Get Started
+                <ArrowRight className="w-5 h-5" />
+              </Link>
+            ) : (
+              <button
+                onClick={handleSubscribe}
+                disabled={subLoading}
+                className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
+              >
+                {subLoading ? (
+                  <Loader2 className="w-5 h-5 animate-spin" />
+                ) : (
+                  <CreditCard className="w-5 h-5" />
+                )}
+                Subscribe Now - $9.99/mo
+              </button>
+            )
+          ) : (
+            <Link 
+              to="/auth" 
+              className="btn-primary inline-flex items-center gap-2 text-lg px-8 py-4"
+            >
+              Get Started
+              <ArrowRight className="w-5 h-5" />
+            </Link>
+          )}
         </div>
       </section>
 
