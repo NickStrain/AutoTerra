@@ -6,4 +6,4 @@ sentence-transformers
 python-dotenv
 # github
 # requests
-# google-genai
+google-genai
