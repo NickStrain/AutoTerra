@@ -18,7 +18,8 @@ import {
   ExternalLink,
   Lock,
   Unlock,
-  FileCode
+  FileCode,
+  Play
 } from 'lucide-react';
 
 interface Requirements {
@@ -61,6 +62,35 @@ interface TerraformFile {
   providers: string[];
 }
 
+interface SandboxValidation {
+  valid: boolean;
+  format_valid: boolean;
+  init_success: boolean;
+  validate_output: string;
+  errors: string[];
+  warnings: string[];
+}
+
+interface SandboxSecurityScan {
+  passed: boolean;
+  critical_issues: number;
+  high_issues: number;
+  medium_issues: number;
+  low_issues: number;
+  findings: any[];
+  scanner: string;
+}
+
+interface SandboxTestResult {
+  status: string;
+  timestamp: string;
+  validation: SandboxValidation | null;
+  security_scans: SandboxSecurityScan[];
+  plan_output: string | null;
+  overall_passed: boolean;
+  summary: string;
+}
+
 const AutoTerra = () => {
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
@@ -81,6 +111,10 @@ const AutoTerra = () => {
   const [filterTerraform, setFilterTerraform] = useState(false);
   const [extractedFiles, setExtractedFiles] = useState<TerraformFile[]>([]);
 
+  // Sandbox Testing State
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<SandboxTestResult | null>(null);
+
   const API_URL = 'http://localhost:8000';
 
   const handleSubmit = async () => {
@@ -90,6 +124,7 @@ const AutoTerra = () => {
     setError('');
     setStage('Analyzing query...');
     setResult(null);
+    setTestResult(null);
 
     try {
       const response = await fetch(`${API_URL}/api/analyze-query`, {
@@ -153,6 +188,35 @@ const AutoTerra = () => {
     }
   };
 
+  const testInSandbox = async () => {
+    if (!result || !result.terraform_code) return;
+
+    setTesting(true);
+    setError('');
+    setTestResult(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/test-sandbox`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          terraform_code: result.terraform_code,
+          run_security_scan: true,
+          generate_plan: true
+        })
+      });
+
+      if (!response.ok) throw new Error('Sandbox testing failed');
+
+      const data = await response.json();
+      setTestResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sandbox testing failed');
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const downloadCode = () => {
     if (!result) return;
     const blob = new Blob([result.terraform_code], { type: 'text/plain' });
@@ -170,6 +234,7 @@ const AutoTerra = () => {
       requirements: result.requirements,
       variables: result.variables,
       validation: result.validation_summary,
+      sandbox_test: testResult,
       timestamp: new Date().toISOString()
     };
     const blob = new Blob([JSON.stringify(metadata, null, 2)], { type: 'application/json' });
@@ -249,7 +314,6 @@ const AutoTerra = () => {
     setGithubStep('extracting');
 
     try {
-      // Get selected repository details
       const selectedReposList = Array.from(selectedRepos).map(repoId => {
         const repo = repositories.find(r => r.id === repoId);
         return repo ? {
@@ -262,7 +326,6 @@ const AutoTerra = () => {
         } : null;
       }).filter(r => r !== null);
 
-      // Send to backend for extraction
       const response = await fetch(`${API_URL}/api/extract-github`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -277,13 +340,11 @@ const AutoTerra = () => {
       }
 
       const data = await response.json();
-      // Update UI with results
       setExtractedFiles(data.files || []);
       setShowGithubModal(false);
       setGithubStep('auth');
       setSelectedRepos(new Set());
 
-      // Populate query with extraction summary
       if (data.total_files > 0) {
         const summary = `Extracted ${data.total_files} Terraform files from ${data.repositories_processed} GitHub repository(ies)`;
         setQuery(summary);
@@ -584,6 +645,18 @@ const AutoTerra = () => {
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
                 <h2 className="text-lg font-semibold text-foreground">Generated Code</h2>
                 <div className="flex gap-2">
+                  <button 
+                    onClick={testInSandbox} 
+                    disabled={testing}
+                    className="btn-secondary flex items-center gap-2"
+                  >
+                    {testing ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Play className="w-4 h-4" />
+                    )}
+                    <span>{testing ? 'Testing...' : 'Test Sandbox'}</span>
+                  </button>
                   <button onClick={downloadCode} className="btn-secondary">
                     <Download className="w-4 h-4" />
                     <span>.tf</span>
@@ -602,6 +675,162 @@ const AutoTerra = () => {
                 </pre>
               </div>
             </section>
+
+            {testResult && (
+              <section className="card-minimal">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-2">
+                    <Terminal className="w-5 h-5 text-primary" />
+                    <h2 className="text-lg font-semibold text-foreground">Sandbox Test Results</h2>
+                  </div>
+                  <div className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    testResult.overall_passed 
+                      ? 'bg-success/10 text-success border border-success/20' 
+                      : 'bg-destructive/10 text-destructive border border-destructive/20'
+                  }`}>
+                    {testResult.overall_passed ? 'PASSED' : 'FAILED'}
+                  </div>
+                </div>
+
+                {testResult.validation && (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                      Terraform Validation
+                    </h3>
+                    <div className="bg-secondary/30 rounded-lg p-4 border border-border/50">
+                      <div className="grid grid-cols-3 gap-4 mb-4">
+                        <div>
+                          <span className="text-muted-foreground text-xs">Format</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            {testResult.validation.format_valid ? (
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            ) : (
+                              <AlertTriangle className="w-4 h-4 text-warning" />
+                            )}
+                            <span className="text-foreground text-sm">
+                              {testResult.validation.format_valid ? 'Valid' : 'Invalid'}
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">Init</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            {testResult.validation.init_success ? (
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            ) : (
+                              <AlertTriangle className="w-4 h-4 text-destructive" />
+                            )}
+                            <span className="text-foreground text-sm">
+                              {testResult.validation.init_success ? 'Success' : 'Failed'}
+                            </span>
+                          </div>
+                        </div>
+                        <div>
+                          <span className="text-muted-foreground text-xs">Validate</span>
+                          <div className="flex items-center gap-2 mt-1">
+                            {testResult.validation.valid ? (
+                              <CheckCircle className="w-4 h-4 text-success" />
+                            ) : (
+                              <AlertTriangle className="w-4 h-4 text-destructive" />
+                            )}
+                            <span className="text-foreground text-sm">
+                              {testResult.validation.valid ? 'Valid' : 'Invalid'}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {testResult.validation.errors.length > 0 && (
+                        <div className="mb-4">
+                          <h4 className="text-destructive font-medium text-sm mb-2">Errors:</h4>
+                          <ul className="space-y-1">
+                            {testResult.validation.errors.map((error, idx) => (
+                              <li key={idx} className="text-destructive text-xs">• {error}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+
+                      {testResult.validation.warnings.length > 0 && (
+                        <div>
+                          <h4 className="text-warning font-medium text-sm mb-2">Warnings:</h4>
+                          <ul className="space-y-1">
+                            {testResult.validation.warnings.map((warning, idx) => (
+                              <li key={idx} className="text-warning text-xs">• {warning}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {testResult.security_scans.length > 0 && (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                      Security Scans
+                    </h3>
+                    <div className="space-y-3">
+                      {testResult.security_scans.map((scan, idx) => (
+                        <div key={idx} className="bg-secondary/30 rounded-lg p-4 border border-border/50">
+                          <div className="flex items-center justify-between mb-3">
+                            <div className="flex items-center gap-2">
+                              <Shield className="w-4 h-4 text-primary" />
+                              <span className="text-foreground font-medium text-sm">{scan.scanner}</span>
+                            </div>
+                            <span className={`px-2 py-1 rounded text-xs font-medium ${
+                              scan.passed 
+                                ? 'bg-success/10 text-success' 
+                                : 'bg-destructive/10 text-destructive'
+                            }`}>
+                              {scan.passed ? 'Passed' : 'Failed'}
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-4 gap-3">
+                            <div>
+                              <span className="text-muted-foreground text-xs">Critical</span>
+                              <div className="text-foreground font-semibold">{scan.critical_issues}</div>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground text-xs">High</span>
+                              <div className="text-foreground font-semibold">{scan.high_issues}</div>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground text-xs">Medium</span>
+                              <div className="text-foreground font-semibold">{scan.medium_issues}</div>
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground text-xs">Low</span>
+                              <div className="text-foreground font-semibold">{scan.low_issues}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {testResult.plan_output && (
+                  <div className="mb-6">
+                    <h3 className="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+                      Terraform Plan
+                    </h3>
+                    <div className="bg-background p-4 rounded-lg border border-border max-h-96 overflow-y-auto">
+                      <pre className="text-primary text-xs font-mono whitespace-pre-wrap">
+                        {testResult.plan_output}
+                      </pre>
+                    </div>
+                  </div>
+                )}
+
+                <div className="bg-primary/5 border border-primary/20 rounded-lg p-4">
+                  <h4 className="text-primary font-medium text-sm mb-2">Summary</h4>
+                  <pre className="text-muted-foreground text-xs whitespace-pre-wrap font-mono">
+                    {testResult.summary}
+                  </pre>
+                </div>
+              </section>
+            )}
           </div>
         )}
 
@@ -612,7 +841,6 @@ const AutoTerra = () => {
         </footer>
       </div>
 
-      {/* GitHub Modal */}
       {showGithubModal && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <div className="bg-background border border-border rounded-2xl max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
