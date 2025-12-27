@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  terraform-rag-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: terraform-rag-api
+    ports:
+      - "8000:8000"
+    environment:
+      - PINECONE_API_KEY=${PINECONE_API_KEY}
+      - PINECONE_ENVIRONMENT=${PINECONE_ENVIRONMENT}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    env_file:
+      - .env
+    volumes:
+      # Mount code for development (remove in production)
+      - ./:/app
+      # Persist Terraform cache
+      - terraform-cache:/root/.terraform.d
+    restart: unless-stopped
+    networks:
+      - terraform-network
+
+  # Optional: Add a frontend service
+  # frontend:
+  #   build:
+  #     context: ./frontend
+  #     dockerfile: Dockerfile
+  #   container_name: terraform-frontend
+  #   ports:
+  #     - "3000:3000"
+  #   depends_on:
+  #     - terraform-rag-api
+  #   networks:
+  #     - terraform-network
+
+volumes:
+  terraform-cache:
+
+networks:
+  terraform-network:
+    driver: bridge

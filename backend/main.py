@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 import os
 import re
 import requests
+import shutil
 from dotenv import load_dotenv
 
 # Import your RAG system classes
@@ -21,23 +22,37 @@ from rag_pipeline import (
 )
 from google import genai
 
+# Import sandbox tester
+from sandbox_testing import TerraformSandboxTester
+
 load_dotenv()
 
-# Global RAG system instance
+# Global instances
 rag_system = None
+sandbox_tester = None
+terraform_available = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan event handler for startup and shutdown"""
-    global rag_system
+    global rag_system, sandbox_tester, terraform_available
     
     # Startup
-    print("🚀 Initializing Terraform IaC RAG System...")
+    print("Initializing Terraform IaC RAG System...")
+    
+    # Check if Terraform is installed
+    terraform_available = shutil.which('terraform') is not None
+    if terraform_available:
+        print("✓ Terraform found in PATH")
+    else:
+        print("⚠ WARNING: Terraform not found in PATH")
+        print("  Sandbox testing will be disabled")
+        print("  Install from: https://www.terraform.io/downloads")
     
     # Get environment variables
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
-    api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
+    api_key = os.getenv('GEMINI_API_KEY')
     
     if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
         raise Exception("PINECONE_API_KEY and PINECONE_ENVIRONMENT must be set")
@@ -63,28 +78,38 @@ async def lifespan(app: FastAPI):
             model_name="gemini-2.5-flash"
         )
         
-        print("✅ RAG System initialized successfully")
+        # Initialize sandbox tester only if Terraform is available
+        if terraform_available:
+            try:
+                sandbox_tester = TerraformSandboxTester()
+                print("✓ Sandbox Tester initialized successfully")
+            except Exception as e:
+                print(f"⚠ WARNING: Sandbox tester initialization failed: {e}")
+                sandbox_tester = None
+        else:
+            print("⚠ Sandbox Tester disabled (Terraform not found)")
+        
+        print("✓ RAG System initialized successfully")
         
     except Exception as e:
-        print(f"❌ Error initializing RAG system: {e}")
+        print(f"ERROR: Error initializing systems: {e}")
         raise
     
     yield
     
-    # Shutdown (cleanup if needed)
-    print("👋 Shutting down...")
+    # Shutdown
+    print("Shutting down...")
 
 app = FastAPI(title="Terraform IaC Generator API", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten later
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # MUST include OPTIONS
-    allow_headers=["*"],  # MUST include Content-Type, Authorization
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-
-# Existing Pydantic models
+# Pydantic models
 class QueryRequest(BaseModel):
     query: str
 
@@ -92,10 +117,39 @@ class GenerateRequest(BaseModel):
     query: str
     requirements: Dict
     variables: Dict
+    run_sandbox_test: bool = True
+    run_security_scan: bool = True
+    generate_plan: bool = True
 
 class AnalyzeResponse(BaseModel):
     requirements: Dict
     message: str
+
+class ValidationResultModel(BaseModel):
+    valid: bool
+    format_valid: bool
+    init_success: bool
+    validate_output: str
+    errors: List[str]
+    warnings: List[str]
+
+class SecurityScanResultModel(BaseModel):
+    passed: bool
+    critical_issues: int
+    high_issues: int
+    medium_issues: int
+    low_issues: int
+    findings: List[Dict]
+    scanner: str
+
+class SandboxTestResult(BaseModel):
+    status: str
+    timestamp: str
+    validation: Optional[ValidationResultModel]
+    security_scans: List[SecurityScanResultModel]
+    plan_output: Optional[str]
+    overall_passed: bool
+    summary: str
 
 class GenerateResponse(BaseModel):
     terraform_code: str
@@ -104,9 +158,11 @@ class GenerateResponse(BaseModel):
     variables: Dict
     used_variables: List[str]
     unused_variables: List[str]
+    sandbox_test_result: Optional[SandboxTestResult] = None
+    sandbox_test_available: bool
     message: str
 
-# New GitHub models
+# GitHub models
 class GitHubRepository(BaseModel):
     id: int
     name: str
@@ -138,6 +194,21 @@ class GitHubExtractionResponse(BaseModel):
     files: List[TerraformFileData]
     message: str
 
+# Sandbox testing models
+class SandboxTestRequest(BaseModel):
+    terraform_code: str
+    run_security_scan: bool = True
+    generate_plan: bool = True
+
+class SandboxTestResponse(BaseModel):
+    status: str
+    timestamp: str
+    validation: Optional[ValidationResultModel]
+    security_scans: List[SecurityScanResultModel]
+    plan_output: Optional[str]
+    overall_passed: bool
+    summary: str
+
 
 @app.get("/")
 async def root():
@@ -145,10 +216,10 @@ async def root():
     return {
         "status": "online",
         "service": "Terraform IaC Generator API",
-        "version": "1.0.0"
+        "version": "1.0.0",
+        "terraform_available": terraform_available
     }
 
-# FIXED: Add explicit OPTIONS handler for CORS preflight
 @app.options("/api/analyze-query")
 async def options_analyze_query():
     """Handle CORS preflight for analyze-query"""
@@ -164,13 +235,14 @@ async def options_extract_github():
     """Handle CORS preflight for extract-github"""
     return {"status": "ok"}
 
+@app.options("/api/test-sandbox")
+async def options_test_sandbox():
+    """Handle CORS preflight for test-sandbox"""
+    return {"status": "ok"}
+
 @app.post("/api/analyze-query", response_model=AnalyzeResponse)
 async def analyze_query(request: QueryRequest):
-    """
-    Analyze user query and extract requirements
-    
-    Layer 1: Query Understanding
-    """
+    """Analyze user query and extract requirements"""
     if not rag_system:
         raise HTTPException(status_code=503, detail="RAG system not initialized")
     
@@ -178,9 +250,8 @@ async def analyze_query(request: QueryRequest):
         raise HTTPException(status_code=400, detail="Query cannot be empty")
     
     try:
-        print(f"\n📝 Analyzing query: {request.query}")
+        print(f"\nAnalyzing query: {request.query}")
         
-        # Use the query understanding agent
         requirements = rag_system.query_understanding_agent(request.query)
         
         return AnalyzeResponse(
@@ -189,59 +260,58 @@ async def analyze_query(request: QueryRequest):
         )
         
     except Exception as e:
-        print(f"❌ Error analyzing query: {e}")
+        print(f"ERROR: Error analyzing query: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/generate", response_model=GenerateResponse)
 async def generate_terraform(request: GenerateRequest):
-    """
-    Generate Terraform code with AI validation
-    
-    Layers 2-6: Variable Collection, Retrieval, Reranking, Generation, Reflection
-    """
+    """Generate Terraform code with AI validation and optional sandbox testing"""
     if not rag_system:
         raise HTTPException(status_code=503, detail="RAG system not initialized")
     
     try:
-        print(f"\n🏗️ Generating Terraform code...")
+        print(f"\n{'='*70}")
+        print(f"TERRAFORM CODE GENERATION STARTED")
+        print(f"{'='*70}")
         print(f"Variables: {request.variables}")
         
-        # AI-powered input validation (Layer 2)
-        print("\n🔍 Validating inputs with AI...")
+        # AI-powered input validation
+        print("\n[1/6] Validating inputs with AI...")
         correction_result = rag_system.validator.validate_and_correct(
             request.variables,
             request.requirements.get('resource_type', 'infrastructure')
         )
         
-        # Use corrected variables
         validated_variables = correction_result.corrected_variables
+        print(f"      Variables after validation: {validated_variables}")
         
-        print(f"✅ Variables after validation: {validated_variables}")
-        
-        # Layer 3: Multi-Strategy Retrieval
-        print("\n📚 Retrieving relevant documentation...")
+        # Multi-Strategy Retrieval
+        print("\n[2/6] Retrieving relevant documentation...")
         retrieval_results = rag_system.retrieval.multi_strategy_retrieve(
             request.query,
             request.requirements['resource_type']
         )
+        print(f"      Retrieved {len(retrieval_results)} relevant chunks")
         
-        # Layer 4: Re-ranking & Validation
-        print("\n🎯 Re-ranking and validating context...")
+        # Re-ranking & Validation
+        print("\n[3/6] Re-ranking and validating context...")
         best_context = rag_system.reranker.rerank_and_validate(
             request.query,
             retrieval_results
         )
+        print(f"      Selected best {len(best_context)} context chunks")
         
-        # Layer 5: Multi-Agent Generation
-        print("\n🤖 Generating code with multi-agent system...")
+        # Multi-Agent Generation
+        print("\n[4/6] Generating code with multi-agent system...")
         terraform_code, validation_results, variable_tracker = rag_system.agents.generate_with_agents(
             request.query,
             best_context,
             validated_variables
         )
+        print(f"      Initial code generated ({len(terraform_code)} chars)")
         
-        # Layer 6: Reflection & QA
-        print("\n✨ Applying reflection and quality assurance...")
+        # Reflection & QA
+        print("\n[5/6] Applying reflection and quality assurance...")
         final_code = rag_system.reflection.reflection_qa_pipeline(
             terraform_code,
             validation_results,
@@ -250,6 +320,7 @@ async def generate_terraform(request: GenerateRequest):
             variable_tracker,
             max_iterations=4
         )
+        print(f"      Final code refined ({len(final_code)} chars)")
         
         # Final verification
         final_tracker = VariableTracker()
@@ -266,8 +337,64 @@ async def generate_terraform(request: GenerateRequest):
             for agent, val in validation_results.items()
         }
         
-        print(f"\n✅ Generation complete!")
-        print(f"Variables used: {len(used_vars)}/{len(validated_variables)}")
+        print(f"\n      Generation complete!")
+        print(f"      Variables used: {len(used_vars)}/{len(validated_variables)}")
+        
+        # Run sandbox testing if enabled and available
+        sandbox_result = None
+        if request.run_sandbox_test and terraform_available and sandbox_tester:
+            print(f"\n[6/6] Running sandbox testing...")
+            print(f"{'='*70}")
+            
+            try:
+                test_result = sandbox_tester.test_terraform_code(
+                    terraform_code=final_code,
+                    run_security_scan=request.run_security_scan,
+                    generate_plan=request.generate_plan
+                )
+                
+                # Convert to response model
+                sandbox_result = SandboxTestResult(
+                    status=test_result.status,
+                    timestamp=test_result.timestamp,
+                    validation=ValidationResultModel(**test_result.validation.__dict__) if test_result.validation else None,
+                    security_scans=[SecurityScanResultModel(**scan.__dict__) for scan in test_result.security_scans],
+                    plan_output=test_result.plan_output,
+                    overall_passed=test_result.overall_passed,
+                    summary=test_result.summary
+                )
+                
+                print(f"\n      Sandbox testing complete!")
+                print(f"      Status: {test_result.status}")
+                print(f"      Overall passed: {test_result.overall_passed}")
+                
+                if not test_result.overall_passed:
+                    print(f"      WARNING: Sandbox tests failed!")
+                    if test_result.validation and test_result.validation.errors:
+                        print(f"      Validation errors: {len(test_result.validation.errors)}")
+                    for scan in test_result.security_scans:
+                        if not scan.passed:
+                            print(f"      Security issues: {scan.critical_issues} critical, {scan.high_issues} high")
+                
+            except Exception as e:
+                print(f"      WARNING: Sandbox testing failed: {e}")
+                import traceback
+                traceback.print_exc()
+        elif request.run_sandbox_test and not terraform_available:
+            print(f"\n[6/6] Sandbox testing skipped (Terraform not installed)")
+            print(f"      Install Terraform from: https://www.terraform.io/downloads")
+        else:
+            print(f"\n[6/6] Sandbox testing skipped (disabled)")
+        
+        print(f"\n{'='*70}")
+        print(f"GENERATION PIPELINE COMPLETE")
+        print(f"{'='*70}\n")
+        
+        message = "Terraform code generated successfully"
+        if sandbox_result:
+            message += " and tested in sandbox"
+        elif request.run_sandbox_test and not terraform_available:
+            message += " (sandbox testing unavailable - Terraform not installed)"
         
         return GenerateResponse(
             terraform_code=final_code,
@@ -276,22 +403,20 @@ async def generate_terraform(request: GenerateRequest):
             variables=validated_variables,
             used_variables=used_vars,
             unused_variables=unused_vars,
-            message="Terraform code generated successfully"
+            sandbox_test_result=sandbox_result,
+            sandbox_test_available=terraform_available,
+            message=message
         )
         
     except Exception as e:
-        print(f"❌ Error generating code: {e}")
+        print(f"ERROR: Error generating code: {e}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
-# NEW: GitHub Extraction Endpoint
 @app.post("/api/extract-github", response_model=GitHubExtractionResponse)
 async def extract_from_github(request: GitHubExtractionRequest):
-    """
-    Extract Terraform code from GitHub repositories
-    Uses the GitHub API to fetch and parse Terraform files
-    """
+    """Extract Terraform code from GitHub repositories"""
     if not request.github_token:
         raise HTTPException(status_code=400, detail="GitHub token is required")
     
@@ -313,9 +438,8 @@ async def extract_from_github(request: GitHubExtractionRequest):
     
     for repo in request.repositories:
         try:
-            print(f"\n📦 Processing: {repo.full_name}")
+            print(f"\nProcessing: {repo.full_name}")
             
-            # Extract files from this repository
             files = extract_terraform_from_repo(
                 repo.full_name,
                 repo.html_url,
@@ -325,10 +449,10 @@ async def extract_from_github(request: GitHubExtractionRequest):
             all_files.extend(files)
             repos_processed += 1
             
-            print(f"   ✅ Extracted {len(files)} Terraform files")
+            print(f"   Extracted {len(files)} Terraform files")
             
         except Exception as e:
-            print(f"   ❌ Error processing {repo.full_name}: {e}")
+            print(f"   ERROR processing {repo.full_name}: {e}")
             continue
     
     print(f"\n{'='*70}")
@@ -336,41 +460,6 @@ async def extract_from_github(request: GitHubExtractionRequest):
     print(f"{'='*70}")
     print(f"Repositories processed: {repos_processed}/{len(request.repositories)}")
     print(f"Total Terraform files extracted: {len(all_files)}")
-    
-    # Print detailed breakdown
-    if all_files:
-        print(f"\n📊 FILE BREAKDOWN:")
-        file_types = {}
-        resources_found = set()
-        providers_found = set()
-        
-        for file in all_files:
-            # Count file types
-            file_types[file.file_type] = file_types.get(file.file_type, 0) + 1
-            
-            # Collect resources and providers
-            resources_found.update(file.resources)
-            providers_found.update(file.providers)
-            
-            # Print each file
-            print(f"\n   📄 {file.repo_name}/{file.path}")
-            print(f"      Type: {file.file_type}")
-            print(f"      Size: {file.size_bytes} bytes")
-            if file.resources:
-                print(f"      Resources: {', '.join(file.resources[:3])}" + 
-                      (f" +{len(file.resources)-3} more" if len(file.resources) > 3 else ""))
-            if file.providers:
-                print(f"      Providers: {', '.join(file.providers)}")
-            if file.variables:
-                print(f"      Variables: {len(file.variables)} defined")
-            if file.outputs:
-                print(f"      Outputs: {len(file.outputs)} defined")
-        
-        print(f"\n📈 STATISTICS:")
-        print(f"   File types: {dict(file_types)}")
-        print(f"   Unique resources: {len(resources_found)}")
-        print(f"   Providers used: {', '.join(providers_found)}")
-        print(f"   Total code size: {sum(f.size_bytes for f in all_files):,} bytes")
     
     return GitHubExtractionResponse(
         status="success",
@@ -380,19 +469,68 @@ async def extract_from_github(request: GitHubExtractionRequest):
         message=f"Successfully extracted {len(all_files)} Terraform files from {repos_processed} repositories"
     )
 
+@app.post("/api/test-sandbox", response_model=SandboxTestResponse)
+async def test_in_sandbox(request: SandboxTestRequest):
+    """Test Terraform code in isolated sandbox"""
+    if not terraform_available:
+        raise HTTPException(
+            status_code=503, 
+            detail="Terraform not installed. Install from https://www.terraform.io/downloads"
+        )
+    
+    if not sandbox_tester:
+        raise HTTPException(status_code=503, detail="Sandbox tester not initialized")
+    
+    if not request.terraform_code.strip():
+        raise HTTPException(status_code=400, detail="Terraform code cannot be empty")
+    
+    try:
+        print(f"\n{'='*70}")
+        print(f"SANDBOX TESTING STARTED")
+        print(f"{'='*70}")
+        
+        # Test the code
+        result = sandbox_tester.test_terraform_code(
+            terraform_code=request.terraform_code,
+            run_security_scan=request.run_security_scan,
+            generate_plan=request.generate_plan
+        )
+        
+        # Convert result to response model
+        response = SandboxTestResponse(
+            status=result.status,
+            timestamp=result.timestamp,
+            validation=ValidationResultModel(**result.validation.__dict__) if result.validation else None,
+            security_scans=[SecurityScanResultModel(**scan.__dict__) for scan in result.security_scans],
+            plan_output=result.plan_output,
+            overall_passed=result.overall_passed,
+            summary=result.summary
+        )
+        
+        print(f"\n{'='*70}")
+        print(f"SANDBOX TESTING COMPLETE")
+        print(f"{'='*70}")
+        print(f"Status: {result.status}")
+        print(f"Overall passed: {result.overall_passed}")
+        
+        return response
+        
+    except Exception as e:
+        print(f"ERROR: Sandbox testing failed: {e}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 def extract_terraform_from_repo(
     repo_full_name: str,
     repo_url: str,
     headers: dict
 ) -> List[TerraformFileData]:
-    """
-    Extract all Terraform files from a single repository
-    """
+    """Extract all Terraform files from a single repository"""
     files = []
     skip_dirs = ['.git', '.terraform', 'test', 'tests', 'examples', 'example', '.github']
     
-    # Regex patterns for parsing
     resource_pattern = re.compile(r'resource\s+"([^"]+)"\s+"([^"]+)"')
     module_pattern = re.compile(r'module\s+"([^"]+)"\s*\{[^}]*source\s*=\s*"([^"]+)"', re.DOTALL)
     provider_pattern = re.compile(r'provider\s+"([^"]+)"')
@@ -400,24 +538,19 @@ def extract_terraform_from_repo(
     output_pattern = re.compile(r'output\s+"([^"]+)"')
     
     def fetch_contents(path: str = ""):
-        """Recursively fetch repository contents"""
         url = f"https://api.github.com/repos/{repo_full_name}/contents/{path}" if path else \
               f"https://api.github.com/repos/{repo_full_name}/contents"
         
         try:
             response = requests.get(url, headers=headers, timeout=10)
-            
             if response.status_code == 200:
                 return response.json()
         except Exception as e:
-            print(f"      ⚠️  Error fetching {path}: {e}")
-        
+            print(f"      WARNING: Error fetching {path}: {e}")
         return []
     
     def classify_file_type(filepath: str, content: str) -> str:
-        """Classify the type of Terraform file"""
         filename = filepath.lower()
-        
         if 'variables' in filename or filename.startswith('vars'):
             return 'variables'
         elif 'outputs' in filename:
@@ -434,7 +567,6 @@ def extract_terraform_from_repo(
             return 'resource'
     
     def parse_terraform_content(content: str) -> dict:
-        """Parse Terraform file content to extract metadata"""
         resources = [f"{m[0]}.{m[1]}" for m in resource_pattern.findall(content)]
         modules = [m[1] for m in module_pattern.findall(content)]
         providers = list(set(provider_pattern.findall(content)))
@@ -450,28 +582,20 @@ def extract_terraform_from_repo(
         }
     
     def process_item(item: dict):
-        """Process a single file or directory"""
         if item['type'] == 'dir':
-            # Skip certain directories
             if any(skip in item['path'] for skip in skip_dirs):
                 return
-            
-            # Recursively process directory
             sub_contents = fetch_contents(item['path'])
             for sub_item in sub_contents:
                 process_item(sub_item)
         
         elif item['type'] == 'file':
-            # Check if it's a Terraform file
             if item['name'].endswith('.tf') or item['name'].endswith('.tfvars') or item['name'].endswith('.hcl'):
                 try:
-                    # Fetch file content
                     file_response = requests.get(item['download_url'], headers=headers, timeout=10)
                     
                     if file_response.status_code == 200:
                         content = file_response.text
-                        
-                        # Parse the file
                         parsed = parse_terraform_content(content)
                         file_type = classify_file_type(item['path'], content)
                         
@@ -491,11 +615,9 @@ def extract_terraform_from_repo(
                         files.append(tf_file)
                         
                 except Exception as e:
-                    print(f"      ⚠️  Error processing {item['path']}: {e}")
+                    print(f"      WARNING: Error processing {item['path']}: {e}")
     
-    # Start processing from root
     contents = fetch_contents()
-    
     for item in contents:
         process_item(item)
     
@@ -508,6 +630,8 @@ async def health_check():
     return {
         "status": "healthy",
         "rag_system": "initialized" if rag_system else "not initialized",
+        "sandbox_tester": "initialized" if sandbox_tester else "not initialized",
+        "terraform_available": terraform_available,
         "components": {
             "pinecone": rag_system is not None,
             "gemini": rag_system is not None,
@@ -516,6 +640,7 @@ async def health_check():
             "agents": rag_system is not None and rag_system.agents is not None,
             "reflection": rag_system is not None and rag_system.reflection is not None,
             "validator": rag_system is not None and rag_system.validator is not None,
+            "sandbox_tester": sandbox_tester is not None,
         }
     }
 

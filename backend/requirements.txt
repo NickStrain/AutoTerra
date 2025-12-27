@@ -1,0 +1,9 @@
+fastapi
+python-dotenv
+uvicorn
+pinecone
+sentence-transformers
+python-dotenv
+# github
+# requests
+# google-genai
