@@ -115,8 +115,9 @@ const AutoTerra = () => {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<SandboxTestResult | null>(null);
 
-  // const API_URL = 'https://autoterra-backend-production.up.railway.app';
-  const API_URL = 'http://localhost:8000';
+  const API_URL = 'https://autoterra-production.up.railway.app/';
+  // https://autoterra-production.up.railway.app/
+  // const API_URL = 'http://localhost:8000';
 
   const handleSubmit = async () => {
     if (!query.trim()) return;
