@@ -52,8 +52,10 @@ async def lifespan(app: FastAPI):
     # Get environment variables
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
+    HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
     api_key = os.getenv('GEMINI_API_KEY')
-    
+    if not HUGGINGFACE_API_KEY:
+        raise Exception("No hugging face is set")
     if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
         raise Exception("PINECONE_API_KEY and PINECONE_ENVIRONMENT must be set")
     

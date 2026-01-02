@@ -1,7 +1,18 @@
+#fastapi
+#python-dotenv
+#uvicorn
+#pinecone
+#sentence-transformers
+#python-dotenv
+#github
+
+
 fastapi
 python-dotenv
 uvicorn
 pinecone
-sentence-transformers
+# sentence-transformers
 python-dotenv
-github
+# github
+requests
+google-genai

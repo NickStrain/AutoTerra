@@ -375,16 +375,27 @@ def hf_inference(text:str)-> list[float]:
     hf_api_url = (
     "https://router.huggingface.co/hf-inference/models/"
     "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
-)
+)   
+    
+    HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
     HEADERS = {
-    "Authorization": f"Bearer {os.environ['HF_TOKEN']}",
+    "Authorization": f"Bearer {HUGGINGFACE_API_KEY}",
     "Content-Type": "application/json",
 }
     response = requests.post(hf_api_url,
                              headers=HEADERS,
                              json={"inputs":text},
                              )
-    return response.json()[0]
+    response.raise_for_status()
+    embedding = response.json()
+    print("Embedding received:", embedding)
+    if isinstance(embedding, list) and isinstance(embedding[0], list):
+        embedding = embedding[0]
+    
+    if len(embedding) != 384:
+        raise ValueError(f"Expected embedding dim 384, got {len(embedding)}")
+
+    return embedding
 
 
 
@@ -1354,7 +1365,9 @@ def main():
     PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
     HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
     api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
-
+    if not HUGGINGFACE_API_KEY:
+        print(" Error: HUGGINGFACE_API_KEY must be set")
+        return
     if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
         print(" Error: PINECONE_API_KEY and PINECONE_ENVIRONMENT must be set")
         return
