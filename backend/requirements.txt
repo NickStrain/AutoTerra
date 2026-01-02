@@ -2,8 +2,8 @@ fastapi
 python-dotenv
 uvicorn
 pinecone
-sentence-transformers
+# sentence-transformers
 python-dotenv
 # github
-# requests
+requests
 google-genai

@@ -1,5 +1,5 @@
 from pinecone import Pinecone
-from sentence_transformers import SentenceTransformer
+# from sentence_transformers import SentenceTransformer
 import os
 import json
 import re
@@ -8,7 +8,7 @@ from google import genai
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
-
+import requests
 from dotenv import load_dotenv  
 load_dotenv()
 
@@ -362,17 +362,44 @@ Respond ONLY with JSON (no markdown, no preamble):
         
         print("\n" + "="*70)
 
+def hf_inference(text:str)-> list[float]:
+    """
+    we are using hf inference provider for the minilm
+    
+    :param text: Description
+    :type text: str
+    :return: Description
+    :rtype: list[float]
+    """
+
+    hf_api_url = (
+    "https://router.huggingface.co/hf-inference/models/"
+    "sentence-transformers/all-MiniLM-L6-v2/pipeline/feature-extraction"
+)
+    HEADERS = {
+    "Authorization": f"Bearer {os.environ['HF_TOKEN']}",
+    "Content-Type": "application/json",
+}
+    response = requests.post(hf_api_url,
+                             headers=HEADERS,
+                             json={"inputs":text},
+                             )
+    return response.json()[0]
+
+
 
 class PineconeIndex():
     """Pinecone Index class for vector store operations."""
     def __init__(self, PINECONE_API_KEY, PINECONE_ENVIRONMENT, index_name):
         self.pinecone = Pinecone(api_key=PINECONE_API_KEY, environment=PINECONE_ENVIRONMENT)
         self.index = self.pinecone.Index(index_name)
-        self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+        # self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
 
     def retrieve_index(self, prompt, top_k=5, namespace="__default__"):
         """Retrieve top_k similar items from the index"""
-        query_vector = self.embedding_model.encode([prompt]).tolist()[0]
+        # query_vector = self.embedding_model.encode([prompt]).tolist()[0]
+        query_vector = hf_inference(prompt)
         results = self.index.query(
             vector=query_vector, 
             top_k=top_k, 
@@ -1325,6 +1352,7 @@ def main():
     
     PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
     PINECONE_ENVIRONMENT = os.getenv("PINECONE_ENVIRONMENT")
+    HUGGINGFACE_API_KEY = os.getenv("HUGGINGFACE_API_KEY")
     api_key = os.getenv('GEMINI_API_KEY') or os.getenv('GEMINI_API_KEY')
 
     if not PINECONE_API_KEY or not PINECONE_ENVIRONMENT:
